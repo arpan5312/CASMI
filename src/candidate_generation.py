@@ -176,7 +176,7 @@ def calculate_mass_shift(composition:dict) -> float:
 def calculate_neutral_mass(precursor_mz:float,z:int,multiplier:int,mass_shift:float) -> float:
     """formula: NM = (m/z * |z| - mass_shift)/multiplier"""
 
-    nm = (precursor_mz * abs(z) - mass_shift)/multiplier
+    nm = (precursor_mz * abs(z) - mass_shift + z * ELECTRON_MASS) / multiplier
 
     return nm
 
