@@ -9,6 +9,8 @@ import re
 import numpy as np
 import pandas as pd
 
+from candidate_generation.instrument_aware_tolerance import INSTRUMENT_ACCURACY_PPM
+
 # print(df.columns)
 
 ELEMENT_MASSES = {
@@ -82,7 +84,6 @@ def parse_adduct(adduct: str) -> dict:
         "adduct": adduct,
         "charge": charge,
         "multiplier": multiplier,
-        "ionizer": match.group("ion"),
         "signed_ion" : match.group("ion_sign") + match.group("ion")
     }
 
@@ -179,26 +180,25 @@ def append_neutral_mass(df: pd.DataFrame) -> pd.DataFrame:
     Requires 'adduct' and 'precursor_mz' columns.
     """
     if "adduct" not in df.columns:
-        raise TypeError ("adduct column must be present")
+        raise KeyError("adduct column must be present")
 
     if "precursor_mz" not in df.columns:
-        raise TypeError ("precursor_mz column must be present")
+        raise KeyError("precursor_mz column must be present")
 
-    def mass_for_each_row(adduct,precursor_mz):
-        parsed = parse_adduct(adduct)
+def mass_for_each_row(adduct, precursor_mz):
+    parsed = parse_adduct(adduct)
+    if parsed.get("signed_ion") is None:
+        # Cation: no modification to apply.
+        mass_shift = 0.0
+    else:
         ion = parse_ionizer(parsed["signed_ion"])
         mass_shift = calculate_mass_shift(ion)
-        neutral_mass = calculate_neutral_mass(
-            precursor_mz,
-            parsed["charge"],
-            parsed["multiplier"],
-            mass_shift
-        )
-        return neutral_mass
-    df = df.copy()
-
-    df["neutral_mass"] = [mass_for_each_row(a,p) for a,p in zip(df["adduct"],df["precursor_mz"])]
-    return df
+    return calculate_neutral_mass(
+        precursor_mz,
+        parsed["charge"],
+        parsed["multiplier"],
+        mass_shift,
+    )
 
 def data_frame_modifier(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -212,23 +212,33 @@ def data_frame_modifier(df: pd.DataFrame) -> pd.DataFrame:
         )
     df = df.copy()
     df = df.sort_values("neutral_mass", kind="mergesort")
+    
     return df.set_index("neutral_mass", drop=False)
 
 
-def find_candidates(sorted_df:pd.DataFrame,query_mass:float,tolerance_ppm=float(10.0)) -> pd.DataFrame:
-
+def find_candidates(
+    sorted_df: pd.DataFrame,
+    query_mass: float,
+    tolerance_ppm: float = 10.0,
+) -> pd.DataFrame:
+    """Numeric window search."""
     masses = sorted_df.index.to_numpy()
-
-    delta = tolerance_ppm*query_mass/1000000
-
-    low = query_mass-delta
-    high = query_mass+delta
-
-    lo = np.searchsorted(masses,low,side="left")
-    hi = np.searchsorted(masses,high,side="right")
-
-    
+    delta = tolerance_ppm * query_mass / 1_000_000
+    lo = np.searchsorted(masses, query_mass - delta, side="left")
+    hi = np.searchsorted(masses, query_mass + delta, side="right")
     return sorted_df.iloc[lo:hi]
+
+
+def find_candidates_by_instrument(
+    sorted_df: pd.DataFrame,
+    query_mass: float,
+    instrument_name: str,
+    coverage_factor: float = 1.0,
+) -> pd.DataFrame:
+    """Look up the instrument's tolerance, then delegate."""
+    rated = INSTRUMENT_ACCURACY_PPM.get(instrument_name, 30.0)
+    tolerance = rated * coverage_factor
+    return find_candidates(sorted_df, query_mass, tolerance)
 
 
 
@@ -259,3 +269,12 @@ if __name__ == "__main__":
 
     print(appended_df)
 
+    print ("SORTED")
+    sorted_df = data_frame_modifier(appended_df)
+    print(sorted_df)
+
+    candidates = find_candidates(sorted_df,100.00)
+
+
+    print ("candidates")
+    print(candidates)
