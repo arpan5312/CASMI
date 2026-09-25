@@ -4,6 +4,7 @@
 """
 
 
+from ast import parse
 import re
 import numpy as np
 import pandas as pd
@@ -42,12 +43,11 @@ ELEMENT_MASSES = {
 ELECTRON_MASS = 0.000548579909065
 
 def parse_adduct(adduct: str) -> dict:
-    """converts the adduct to a dictionary"""
-    if not isinstance(adduct,str):
+    """Converts the adduct to a dictionary"""
+    if not isinstance(adduct, str):
         raise TypeError("Adduct must be a string")
 
-    #CATION BYPASS
-    
+    # CATION BYPASS
     if adduct.lower().startswith("[cat]"):
         charge_match = re.search(r"\](\d*)([+-])", adduct)
         if charge_match:
@@ -61,37 +61,30 @@ def parse_adduct(adduct: str) -> dict:
             "adduct": adduct,
             "charge": charge,
             "multiplier": 1,
-            
+            "ionizer": None  
         }
 
-           
-    
-    #NORMAL ADDUCT PARSING
-    match = re.fullmatch(r"\[(?P<body>.+)\](?P<charge>\d*)(?P<sign>[+-])",adduct)
+    pattern = r"\[(?P<multiplier>\d*)M(?P<ion_sign>[+-])(?P<ion>[^\]]+)\](?P<charge>\d*)(?P<charge_sign>[+-])"
+
+    match = re.fullmatch(pattern, adduct)
     if not match:
         raise ValueError(f"Unsupported adduct format: {adduct}")
 
-    ionizer = re.fullmatch(
-    r"\[M[+-](?P<ion>[^\]]+)\](?P<charge>\d*)(?P<sign>[+-])",
-    adduct
-)
-    
-    body = match.group("body")
+
+    mult_str = match.group("multiplier")
+    multiplier = int(mult_str) if mult_str else 1
+
     charge_num = int(match.group("charge")) if match.group("charge") else 1
-    sign = match.group("sign")
+    charge_sign = match.group("charge_sign")
+    charge = charge_num if charge_sign == '+' else -charge_num
 
-    charge = charge_num if sign == '+' else -charge_num
-    m = re.match(r"(\d*)M", body)
-    multiplier = int(m.group(1)) if m and m.group(1) else 1
-
-    return{
+    return {
         "adduct": adduct,
         "charge": charge,
         "multiplier": multiplier,
-        "ionizer":ionizer.group("ion")        
+        "ionizer": match.group("ion"),
+        "signed_ion" : match.group("ion_sign") + match.group("ion")
     }
-
-
 
 def parse_ionizer(formula: str) -> dict:
     if not isinstance(formula, str):
@@ -170,27 +163,56 @@ def calculate_mass_shift(composition:dict) -> float:
     return mass
 
 def calculate_neutral_mass(precursor_mz:float,z:int,multiplier:int,mass_shift:float) -> float:
-    """formula: NM = (m/z * |z| - mass_shift)/multiplier"""
+    
 
     nm = (precursor_mz * abs(z) - mass_shift + z * ELECTRON_MASS) / multiplier
 
     return nm
 
 
+def append_neutral_mass(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    For each row, parse that row's adduct, compute its mass
+    shift, and compute its neutral mass. Attach the result
+    as a 'neutral_mass' column
 
-def data_frame_modifier(df:pd.DataFrame,neutral_mass:float) -> pd.DataFrame:
-    
+    Requires 'adduct' and 'precursor_mz' columns.
+    """
+    if "adduct" not in df.columns:
+        raise TypeError ("adduct column must be present")
 
-    if len(df) > 1:
+    if "precursor_mz" not in df.columns:
+        raise TypeError ("precursor_mz column must be present")
+
+    def mass_for_each_row(adduct,precursor_mz):
+        parsed = parse_adduct(adduct)
+        ion = parse_ionizer(parsed["signed_ion"])
+        mass_shift = calculate_mass_shift(ion)
+        neutral_mass = calculate_neutral_mass(
+            precursor_mz,
+            parsed["charge"],
+            parsed["multiplier"],
+            mass_shift
+        )
+        return neutral_mass
+    df = df.copy()
+
+    df["neutral_mass"] = [mass_for_each_row(a,p) for a,p in zip(df["adduct"],df["precursor_mz"])]
+    return df
+
+def data_frame_modifier(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Sort by 'neutral_mass' ascending and set it as the index.
+    Assumes the 'neutral_mass' column already exists.
+    """
+    if "neutral_mass" not in df.columns:
         raise ValueError(
-            "data_frame_modifier expects a single-row dataframe "
-            "when neutral_mass is a scalar"
+            "DataFrame must contain a 'neutral_mass' column; "
+            "call compute_neutral_masses first"
         )
     df = df.copy()
-    df["neutral_mass"] = neutral_mass
     df = df.sort_values("neutral_mass", kind="mergesort")
-    df = df.set_index("neutral_mass", drop=False)
-    return df
+    return df.set_index("neutral_mass", drop=False)
 
 
 def find_candidates(sorted_df:pd.DataFrame,query_mass:float,tolerance_ppm=float(10.0)) -> pd.DataFrame:
@@ -212,159 +234,28 @@ def find_candidates(sorted_df:pd.DataFrame,query_mass:float,tolerance_ppm=float(
 
 if __name__ == "__main__":
 
-    # ========================================================
-    # TEST 1 — glucose self-test for find_candidates
-    # ========================================================
-    #
-    # Build three entries: one 0.01 Da below glucose, one at
-    # glucose, one 0.01 Da above. Search with a 1 ppm window.
-    # Only the middle entry should be returned, because 0.01 Da
-    # at 180 Da is ~55 ppm, far outside 1 ppm.
+    data = {
+        "adduct": ["[M+H]+", "[M+NH4]+", "[M-H2O+H]+", "[M-2H2O+H]+", "[M+Na]+", "[M+K]+", "[M-H]-", "[M-H2O-H]-", "[M+CH2O2-H]-", "[M+Cl]-"],
+        "precursor_mz":[
+            101.0073,  # [M+H]+
+            118.0338,  # [M+NH4]+
+            82.9967,   # [M-H2O+H]+
+            64.9861,   # [M-2H2O+H]+
+            122.9892,  # [M+Na]+
+            138.9632,  # [M+K]+
+            98.9927,   # [M-H]-
+            80.9821,   # [M-H2O-H]-
+            144.9982,  # [M+CH2O2-H]-
+            134.9694,  # [M+Cl]-
+        ]
+    }
 
-    glucose_mass = (
-        6 * ELEMENT_MASSES["C"]
-        + 12 * ELEMENT_MASSES["H"]
-        + 6 * ELEMENT_MASSES["O"]
-    )
+    df = pd.DataFrame(data)
 
-    glucose_df = pd.DataFrame(
-        {
-            "name": ["lower", "glucose", "upper"],
-            "neutral_mass": [
-                glucose_mass - 0.01,
-                glucose_mass,
-                glucose_mass + 0.01,
-            ],
-        }
-    ).sort_values("neutral_mass").set_index("neutral_mass", drop=False)
+    appended_df = append_neutral_mass(df)
 
-    print()
-    print("=" * 78)
-    print("TEST 1 — glucose self-test")
-    print("=" * 78)
-    print()
-    print(f"glucose neutral mass: {glucose_mass:.6f}")
-    print()
-    print("Library:")
-    print(glucose_df.to_string())
-    print()
+    pd.set_option('display.max_columns',50)
+    pd.set_option('display.max_rows',50)
 
-    glucose_candidates = find_candidates(
-        glucose_df, glucose_mass, tolerance_ppm=1.0
-    )
-    print("Search with tolerance 1 ppm:")
-    print(glucose_candidates.to_string())
-    print()
-    assert list(glucose_candidates["name"]) == ["glucose"], (
-        f"Expected ['glucose'], got {list(glucose_candidates['name'])}"
-    )
-    print("[PASS] only 'glucose' returned at 1 ppm")
-    print()
-
-    # ========================================================
-    # TEST 2 — widen the window to catch the neighbours
-    # ========================================================
-
-    # 0.01 Da at 180 Da is ~55 ppm. A 100 ppm window should
-    # include all three entries.
-
-    glucose_candidates_wide = find_candidates(
-        glucose_df, glucose_mass, tolerance_ppm=100.0
-    )
-    print("Search with tolerance 100 ppm:")
-    print(glucose_candidates_wide.to_string())
-    print()
-    assert len(glucose_candidates_wide) == 3, (
-        f"Expected 3 rows at 100 ppm, got {len(glucose_candidates_wide)}"
-    )
-    print("[PASS] all three entries returned at 100 ppm")
-    print()
-
-    # ========================================================
-    # TEST 3 — empty window
-    # ========================================================
-
-    # Query a mass with nothing nearby.
-
-    empty_result = find_candidates(
-        glucose_df, 500.0, tolerance_ppm=10.0
-    )
-    print("Search for 500.0 at 10 ppm:")
-    print(empty_result.to_string() if len(empty_result) else "(empty)")
-    print()
-    assert len(empty_result) == 0, (
-        f"Expected 0 rows, got {len(empty_result)}"
-    )
-    print("[PASS] empty result returned cleanly")
-    print()
-
-    # ========================================================
-    # TEST 4 — boundary inclusion
-    # ========================================================
-    #
-    # Place an entry exactly at the lower bound of the window
-    # and confirm it is included. This tests the side="left"
-    # on the lower bound.
-
-    test_mass = 100.0
-    lower_bound = test_mass * (1 - 10.0 / 1_000_000)
-
-    boundary_df = pd.DataFrame(
-        {
-            "name": ["at_lower_bound", "at_query", "at_upper_bound"],
-            "neutral_mass": [
-                lower_bound,
-                test_mass,
-                test_mass * (1 + 10.0 / 1_000_000),
-            ],
-        }
-    ).sort_values("neutral_mass").set_index("neutral_mass", drop=False)
-
-    boundary_result = find_candidates(boundary_df, test_mass, tolerance_ppm=10.0)
-
-    print("Boundary test at 100.0, 10 ppm:")
-    print(boundary_df.to_string())
-    print()
-    print("Result:")
-    print(boundary_result.to_string())
-    print()
-    assert len(boundary_result) == 3, (
-        f"Expected 3 rows (both bounds inclusive), got {len(boundary_result)}"
-    )
-    print("[PASS] both boundary entries included (closed interval)")
-    print()
-
-    # ========================================================
-    # TEST 5 — neutral-mass calculation (unchanged)
-    # ========================================================
-
-    adduct = "[M+H]+"
-    precursor_mz = 130.0 + ELEMENT_MASSES["H"] - ELECTRON_MASS
-
-    parsed = parse_adduct(adduct)
-    composition = parse_ionizer(parsed["ionizer"])
-    mass_shift = calculate_mass_shift(composition)
-    neutral_mass = calculate_neutral_mass(
-        precursor_mz,
-        parsed["charge"],
-        parsed["multiplier"],
-        mass_shift,
-    )
-
-    print("=" * 78)
-    print("TEST 5 — neutral-mass calculation")
-    print("=" * 78)
-    print()
-    print(f"adduct         : {adduct}")
-    print(f"precursor_mz   : {precursor_mz}")
-    assert abs(neutral_mass - 130.0) < 1e-9, (
-    f"Expected 130.0, got {neutral_mass}"
-    )
-    print(f"calculated NM  : {neutral_mass}")
-    print()
-
-    print("=" * 78)
-    print("ALL TESTS PASSED")
-    print("=" * 78)
-    print()
+    print(appended_df)
 
