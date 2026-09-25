@@ -2,3 +2,9 @@ The Charge Requirement: The instrument's electromagnetic fields only move and de
 
 Precusor isolation (MS1)
 What Happens: By combining these laws, the machine sets its electric voltages so that only particles with one specific mass-to-charge (\(m/z\)) ratio can pass straight through the filters.If your precursor ion is \(m/z\ 201\), the machine adjusts its fields so that \(m/z\ 201\) flies straight through, while all other masses (\(m/z\ 150\), \(m/z\ 300\), etc.) are violently bent off-course and smashed into the walls, destroying them. 
+
+MS2 -> array of fragments + intensity (corresponding)
+
+intensity criteria:
+stability -> less stable molecules break faster than stabler molecules
+intensity -> intensity of a fragment reflects how much of a 

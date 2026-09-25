@@ -9,7 +9,7 @@ import re
 import numpy as np
 import pandas as pd
 
-from candidate_generation.instrument_aware_tolerance import INSTRUMENT_ACCURACY_PPM
+from instrument_aware_tolerance import INSTRUMENT_ACCURACY_PPM
 
 # print(df.columns)
 
@@ -184,6 +184,14 @@ def append_neutral_mass(df: pd.DataFrame) -> pd.DataFrame:
 
     if "precursor_mz" not in df.columns:
         raise KeyError("precursor_mz column must be present")
+
+
+    df = df.copy()
+    df["neutral_mass"] = [
+        mass_for_each_row(a, p)
+        for a, p in zip(df["adduct"], df["precursor_mz"])
+    ]
+    return df
 
 def mass_for_each_row(adduct, precursor_mz):
     parsed = parse_adduct(adduct)
