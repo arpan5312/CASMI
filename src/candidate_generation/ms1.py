@@ -9,7 +9,7 @@ import re
 import numpy as np
 import pandas as pd
 
-from instrument_aware_tolerance import INSTRUMENT_ACCURACY_PPM
+from .instrument_aware_tolerance import INSTRUMENT_ACCURACY_PPM
 
 # print(df.columns)
 
@@ -247,6 +247,107 @@ def find_candidates_by_instrument(
     rated = INSTRUMENT_ACCURACY_PPM.get(instrument_name, 30.0)
     tolerance = rated * coverage_factor
     return find_candidates(sorted_df, query_mass, tolerance)
+
+
+#might be removed --reconsider
+def build_neutral_mass_index(
+    df: pd.DataFrame,
+    mass_col: str | None = None,
+) -> pd.DataFrame:
+    """
+    Turn an arbitrary DataFrame into a search-ready index keyed by neutral mass.
+
+    Two modes are auto-detected:
+
+    EXPERIMENTAL MODE
+        Triggered when the frame has both 'adduct' and 'precursor_mz' columns.
+        Neutral mass is derived via append_neutral_mass(), which reverses the
+        adduct (parse_adduct → parse_ionizer → calculate_mass_shift →
+        calculate_neutral_mass).
+
+    DATABASE MODE
+        Triggered otherwise. The caller must supply (or let us infer) a column
+        that already holds neutral monoisotopic mass. That column is copied
+        into a new 'neutral_mass' column.
+
+    In both cases the result is sorted ascending by neutral_mass and that
+    column is set as the DataFrame index, ready for find_candidates().
+
+    Parameters
+    ----------
+    df : DataFrame
+    mass_col : str, optional
+        For DATABASE MODE, the column holding neutral monoisotopic mass.
+        If omitted, we try a short list of known COCONUT-style names.
+        Ignored in EXPERIMENTAL MODE.
+
+    Returns
+    -------
+    DataFrame indexed by neutral_mass, sorted ascending, with the original
+    columns preserved plus a 'neutral_mass' column.
+
+    Raises
+    ------
+    KeyError
+        If neither mode can be resolved (missing adduct/precursor_mz AND
+        no usable mass column).
+    ValueError
+        If the resolved mass column is entirely non-numeric.
+    """
+
+    df = df.copy()
+
+    # ------------------------------------------------------------------
+    # EXPERIMENTAL MODE — derive neutral mass from adduct + precursor_mz
+    # ------------------------------------------------------------------
+    if {"adduct", "precursor_mz"}.issubset(df.columns):
+        df = append_neutral_mass(df)
+        return data_frame_modifier(df)
+
+    # ------------------------------------------------------------------
+    # DATABASE MODE — a neutral mass column already exists
+    # ------------------------------------------------------------------
+    if mass_col is None:
+        candidates = [
+            "exact_molecular_weight",  
+            "exact_mass",
+            "monoisotopic_mass",
+            "molecular_weight",         
+            "mass",
+        ]
+        mass_col = next((c for c in candidates if c in df.columns), None)
+        if mass_col is None:
+            raise KeyError(
+                "Cannot resolve a mass column. Expected one of "
+                f"{candidates}, or pass mass_col explicitly. "
+                f"Columns present: {df.columns.tolist()}"
+            )
+        if mass_col == "molecular_weight":
+            import warnings
+            warnings.warn(
+                "Falling back to 'molecular_weight' (average mass). "
+                "This is NOT monoisotopic and will be off by 100+ ppm "
+                "at m/z 300. Pass mass_col='exact_molecular_weight' "
+                "if that column exists.",
+                stacklevel=2,
+            )
+
+    if mass_col not in df.columns:
+        raise KeyError(
+            f"mass_col={mass_col!r} not in DataFrame. "
+            f"Columns: {df.columns.tolist()}"
+        )
+
+    numeric = pd.to_numeric(df[mass_col], errors="coerce")
+    if numeric.notna().sum() == 0:
+        raise ValueError(
+            f"Column {mass_col!r} contains no numeric values."
+        )
+
+    df["neutral_mass"] = numeric
+    df = df.dropna(subset=["neutral_mass"]).reset_index(drop=True)
+
+    return data_frame_modifier(df)
 
 
 
