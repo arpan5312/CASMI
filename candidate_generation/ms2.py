@@ -65,6 +65,26 @@ def make_spectrum(mzs: Any, intensities: Any) -> Spectrum | None:
     return Spectrum(mz=mz, intensities=intensity, metadata={})
 
 
+def _score_cosine_pair(cosine: Any, reference: Spectrum, query: Spectrum) -> float:
+    """Score one spectrum pair across matchms API variants.
+
+    matchms SimilarityFunction objects expose .pair() in current versions;
+    older/local code may incorrectly try to call the object itself. Prefer
+    .pair() and only use the callable fallback when the installed API supports it.
+    """
+    pair_method = getattr(cosine, "pair", None)
+    if callable(pair_method):
+        value = pair_method(reference, query)
+    elif callable(cosine):
+        value = cosine(reference, query)
+    else:
+        raise TypeError(
+            f"{type(cosine).__name__} exposes neither a callable .pair() "
+            "method nor a callable instance; check the installed matchms API."
+        )
+    return _extract_cosine_score(value)
+
+
 def _extract_cosine_score(value: Any) -> float:
     """Extract the scalar similarity from matchms' version-dependent result type.
 
@@ -282,10 +302,9 @@ def rank_candidates(
                         maximum = 0.0
                         for reference in references:
                             try:
-                                # matchms SimilarityFunction objects expose .pair(); they are not callable.
-                                # Result is parsed by _extract_cosine_score for version compatibility.
-                                value = cosine.pair(reference, query)
-                                score = _extract_cosine_score(value)
+                                # Prefer the documented .pair() API; keep a guarded
+                                # fallback for versions that expose callable instances.
+                                score = _score_cosine_pair(cosine, reference, query)
                                 similarity_calls += 1
                                 if score > 0:
                                     positive_scores += 1
@@ -334,6 +353,12 @@ def rank_candidates(
         print(
             "  WARNING: some cosine comparisons failed. "
             "Inspect the first scoring exception before trusting this ranking."
+        )
+    if similarity_calls == 0 and scoring_errors > 0:
+        raise RuntimeError(
+            "Every MS2 similarity comparison failed; refusing to return/save "
+            "a ranking made entirely of fallback zero scores. "
+            f"First exception: {first_scoring_error}"
         )
     if similarity_calls > 0 and positive_scores == 0:
         print(
