@@ -282,7 +282,9 @@ def rank_candidates(
                         maximum = 0.0
                         for reference in references:
                             try:
-                                value = cosine(query, reference)
+                                # matchms SimilarityFunction objects expose .pair(); they are not callable.
+                                # Result is parsed by _extract_cosine_score for version compatibility.
+                                value = cosine.pair(reference, query)
                                 score = _extract_cosine_score(value)
                                 similarity_calls += 1
                                 if score > 0:
@@ -328,6 +330,11 @@ def rank_candidates(
     print(f"  Scoring exceptions:         {scoring_errors:,}")
     if first_scoring_error is not None:
         print(f"  First scoring exception:    {first_scoring_error}")
+    if scoring_errors:
+        print(
+            "  WARNING: some cosine comparisons failed. "
+            "Inspect the first scoring exception before trusting this ranking."
+        )
     if similarity_calls > 0 and positive_scores == 0:
         print(
             "  WARNING: every completed cosine score was zero. "
