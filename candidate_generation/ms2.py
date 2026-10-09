@@ -65,6 +65,38 @@ def make_spectrum(mzs: Any, intensities: Any) -> Spectrum | None:
     return Spectrum(mz=mz, intensities=intensity, metadata={})
 
 
+def _extract_cosine_score(value: Any) -> float:
+    """Extract the scalar similarity from matchms' version-dependent result type.
+
+    matchms versions may return a tuple or a NumPy structured scalar/array with
+    named fields such as score and matches. Treating a structured result as an
+    ordinary array can silently turn every score into zero.
+    """
+    if isinstance(value, np.void) and value.dtype.names:
+        if "score" not in value.dtype.names:
+            raise ValueError(f"Unexpected matchms result fields: {value.dtype.names}")
+        value = value["score"]
+    elif isinstance(value, np.ndarray) and value.dtype.names:
+        if "score" not in value.dtype.names:
+            raise ValueError(f"Unexpected matchms result fields: {value.dtype.names}")
+        value = np.asarray(value["score"]).reshape(-1)[0]
+    elif isinstance(value, (tuple, list)):
+        if not value:
+            raise ValueError("matchms returned an empty score result")
+        value = value[0]
+    elif isinstance(value, np.ndarray):
+        if value.size == 0:
+            raise ValueError("matchms returned an empty score array")
+        value = value.reshape(-1)[0]
+
+    if hasattr(value, "item"):
+        value = value.item()
+    score = float(value)
+    if not np.isfinite(score):
+        return 0.0
+    return score
+
+
 def _required_columns(path: Path, required: set[str]) -> list[str]:
     available = set(pq.ParquetFile(path).schema_arrow.names)
     missing = required - available
@@ -203,6 +235,10 @@ def rank_candidates(
     # several query spectra, and the same spectrum can be encountered again.
     pair_cache: dict[tuple[Any, str], float] = {}
     results: list[dict[str, Any]] = []
+    similarity_calls = 0
+    positive_scores = 0
+    scoring_errors = 0
+    first_scoring_error: str | None = None
     molecule_groups = candidates.groupby("molecule_id", sort=False)
 
     print("\nScoring molecule-level candidate sets...")
@@ -247,10 +283,16 @@ def rank_candidates(
                         for reference in references:
                             try:
                                 value = cosine(query, reference)
-                                score = float(value[0] if isinstance(value, (tuple, list, np.ndarray)) else value)
-                                if np.isfinite(score) and score > maximum:
+                                score = _extract_cosine_score(value)
+                                similarity_calls += 1
+                                if score > 0:
+                                    positive_scores += 1
+                                if score > maximum:
                                     maximum = score
-                            except (ValueError, TypeError, IndexError, FloatingPointError):
+                            except Exception as exc:
+                                scoring_errors += 1
+                                if first_scoring_error is None:
+                                    first_scoring_error = f"{type(exc).__name__}: {exc}"
                                 continue
                         pair_cache[cache_key] = maximum
 
@@ -279,6 +321,19 @@ def rank_candidates(
     ranked = pd.DataFrame(results)
     if ranked.empty:
         raise RuntimeError("MS2 scoring produced no candidate rows.")
+
+    print("\nCosine-scoring diagnostics:")
+    print(f"  Similarity calls completed: {similarity_calls:,}")
+    print(f"  Positive cosine scores:     {positive_scores:,}")
+    print(f"  Scoring exceptions:         {scoring_errors:,}")
+    if first_scoring_error is not None:
+        print(f"  First scoring exception:    {first_scoring_error}")
+    if similarity_calls > 0 and positive_scores == 0:
+        print(
+            "  WARNING: every completed cosine score was zero. "
+            "Treat this run as a failed diagnostic, not a useful ranking; "
+            "inspect peak arrays and matchms result handling."
+        )
 
     # Spectral score is primary. Mass error is a deterministic tie-breaker;
     # candidate_id makes output stable across runs.
