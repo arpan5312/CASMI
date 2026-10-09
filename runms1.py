@@ -10,12 +10,11 @@ from candidate_generation.ms1 import append_neutral_mass
 # PATHS
 # ============================================================
 
-ROOT = Path(__file__).resolve().parents[1]
-CASMI = ROOT / "CASMI"
+ROOT = Path(__file__).resolve().parent
 
-TEST_PATH = CASMI / "data" / "test.parquet"
-CANDIDATE_DB_PATH = CASMI / "data" / "candidate_db.csv"
-OUTPUT_PATH = CASMI / "data" / "ms1_candidates.parquet"
+TEST_PATH = ROOT / "data" / "test.parquet"
+CANDIDATE_DB_PATH = ROOT / "data" / "candidate_db.csv"
+OUTPUT_PATH = ROOT / "data" / "ms1_candidates.parquet"
 
 TOLERANCE_PPM = 5.0
 
