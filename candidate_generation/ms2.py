@@ -247,7 +247,7 @@ def rank_candidates(
                         for reference in references:
                             try:
                                 value = cosine(query, reference)
-                                score = float(value[0] if isinstance(value, tuple) else value)
+                                score = float(value[0] if isinstance(value, (tuple, list, np.ndarray)) else value)
                                 if np.isfinite(score) and score > maximum:
                                     maximum = score
                             except (ValueError, TypeError, IndexError, FloatingPointError):
