@@ -30,7 +30,7 @@ import pandas as pd
 # Paths
 # ---------------------------------------------------------------------------
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]  # repository root (builder lives in data/)
 
 TRAIN_PATH = ROOT / "data" / "train.parquet"
 COCONUT_PATH = ROOT / "data" / "coconutdb.csv"
