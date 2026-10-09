@@ -521,8 +521,8 @@ rather than:
 
 # MS2 spectral-library baseline
 
-The first MS2 baseline ranks each molecule's MS1-retrieved candidate structures by
-the maximum `matchms` greedy cosine similarity against training spectra with the
+The MS2 baseline ranks each molecule's MS1-retrieved candidate structures by the
+maximum `matchms` greedy cosine similarity against training spectra with the
 same `inchikey14`. Training Parquet is streamed in batches; only spectra for
 candidate keys are retained in memory.
 
@@ -532,17 +532,27 @@ Install the additional dependencies in your project environment:
 pip install -r requirements-ms2.txt
 ```
 
-Run from the repository root after `data/ms1_candidates.parquet` has been created:
+Run from the repository root:
 
 ```bash
 python runms2.py
 ```
 
-The ranked output is written to `data/ms2_ranked_candidates.parquet`. It includes
-`ms2_max_cosine`, the best absolute MS1 mass error (used only as a tie-breaker),
-reference-spectrum coverage, rank, and an `is_top25` flag. Candidates without
-training reference spectra receive an MS2 score of zero and remain eligible for
-ranking by the mass-error tie-breaker.
+By default, `runms2.py` runs the full pipeline in order:
+
+1. Rebuild `data/candidate_db.csv` from `data/train.parquet` and `data/coconutdb.csv`.
+2. Regenerate `data/ms1_candidates.parquet` using `runms1.py`.
+3. Run MS2 spectral retrieval and write `data/ms2_ranked_candidates.parquet`.
+
+The builder and MS1 runner resolve paths relative to the repository, not the
+terminal's current directory. To intentionally reuse an existing MS1 candidate
+file, pass `--reuse-ms1-candidates`.
+
+The ranked output includes `ms2_max_cosine`, the best absolute MS1 mass error
+(used only as a tie-breaker), reference-spectrum coverage, rank, and an
+`is_top25` flag. The scoring stage reports the number of cosine calls, positive
+scores, and scoring exceptions. If every completed score is zero, treat that run
+as a diagnostic failure rather than a useful ranking.
 
 This is a baseline, not a validated MRR estimate. Measure it on a leakage-safe
 molecule-level holdout before treating its ranking quality as evidence of hidden
